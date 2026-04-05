@@ -50,12 +50,12 @@ def get_pro_ocr(image_bytes):
     if img is None: raise ValueError("Invalid image")
     
     h, w = img.shape[:2]
-    if w > 1500:
-        img = cv2.resize(img, (1500, int(h * (1500 / w))), interpolation=cv2.INTER_AREA)
+    if w > 2000:
+        img = cv2.resize(img, (2000, int(h * (2000 / w))), interpolation=cv2.INTER_AREA)
 
     # 2. Preprocessing
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
+    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 10)
 
     # 3. Deskewing (The 'Magic' step)
     deskewed_img = deskew(binary)
