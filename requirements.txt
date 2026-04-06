@@ -1,9 +1,8 @@
 fastapi
 uvicorn
-pytesseract
+paddlepaddle
+paddleocr
+python-multipart
 opencv-python-headless
 numpy
-python-multipart
-Pillow
 anyio
-websockets

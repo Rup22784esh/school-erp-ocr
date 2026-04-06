@@ -1,32 +1,25 @@
-FROM python:3.10-slim
+FROM python:3.9-slim
 
-# Step 1: Install system dependencies
+# Install system dependencies for OpenCV, Paddle, and common utils
 RUN apt-get update && apt-get install -y \
-    tesseract-ocr \
-    libgl1 \
+    libgl1-mesa-glx \
     libglib2.0-0 \
-    wget \
-    && apt-get clean \
+    gcc \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Step 2: Manually download High-Quality (LSTM) language data
-WORKDIR /usr/share/tesseract-ocr/4.00/tessdata/
-
-RUN wget https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata -O eng.traineddata && \
-    wget https://github.com/tesseract-ocr/tessdata_fast/raw/main/nep.traineddata -O nep.traineddata && \
-    wget https://github.com/tesseract-ocr/tessdata_fast/raw/main/osd.traineddata -O osd.traineddata
-
-# Step 3: Set Environment Variables for Path and Memory
-ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/4.00/tessdata/
-ENV MALLOC_TRIM_THRESHOLD_=100000
-ENV PYTHONUNBUFFERED=1
-
-# Step 4: App Setup
 WORKDIR /app
+
+# Copy and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy the application code
 COPY . .
 
-# Step 5: Start Service
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
+# Pre-download PaddleOCR models (English & Devanagari/Hindi for Nepalese support)
+# lang='hi' supports Devanagari script used in Nepali
+RUN python3 -c "from paddleocr import PaddleOCR; PaddleOCR(use_angle_cls=True, lang='hi', use_gpu=False)"
+
+# Hugging Face Spaces use port 7860 by default
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]

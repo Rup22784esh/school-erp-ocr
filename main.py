@@ -1,10 +1,15 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from contextlib import asynccontextmanager
 from ocr_engine import get_pro_ocr, warm_up_ocr
 import logging
 import asyncio
 import anyio
+import os
+
+# Security: Set this as an Environment Variable in Hugging Face Settings
+# Or use the default 'school_erp_secret' for now
+API_KEY = os.getenv("API_KEY", "school_erp_secret")
 
 # Setup detailed logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -13,7 +18,7 @@ logger = logging.getLogger("SCHOOL_ERP_PRO")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 1. Server start hote hi engine load karein
-    logger.info("🚀 Starting Server and Warming up OCR...")
+    logger.info("🚀 Starting Server and Warming up PaddleOCR...")
     # Run warm-up in a thread to not block startup
     await anyio.to_thread.run_sync(warm_up_ocr)
     yield
@@ -24,13 +29,14 @@ app = FastAPI(lifespan=lifespan)
 
 @app.get("/", response_class=HTMLResponse)
 def home():
+    # ... (Keep existing HTML but update logs if needed)
     return """
     <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>School ERP - Smart OCR</title>
+        <title>School ERP - Smart OCR (Paddle Powered)</title>
         <style>
             :root { --primary: #2563eb; --bg: #f8fafc; --card: #ffffff; }
             body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg); color: #1e293b; margin: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
@@ -53,8 +59,8 @@ def home():
     </head>
     <body>
         <div class="container">
-            <h1>🎓 School ERP OCR</h1>
-            <p>Upload a Marksheet, ID Card, or Admission Form</p>
+            <h1>🎓 School ERP - Paddle OCR</h1>
+            <p>Powered by Hugging Face (16GB RAM Optimized)</p>
             <div class="upload-area" id="drop-zone">
                 <span id="file-name">Click or Drag & Drop Image Here</span>
                 <input type="file" id="file-input" accept="image/*">
@@ -87,11 +93,11 @@ def home():
                 scanBtn.disabled = true;
                 resultDiv.style.display = 'none';
                 terminal.style.display = 'block';
-                terminal.innerHTML = '<div class="term-line">> Initializing Secure WebSocket Connection...</div>';
+                terminal.innerHTML = '<div class="term-line">> Initializing WebSocket Connection...</div>';
                 const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
                 const ws = new WebSocket(protocol + window.location.host + '/ws-scan');
                 ws.onopen = () => {
-                    terminal.innerHTML += '<div class="term-line">> Connection Established! Uploading image...</div>';
+                    terminal.innerHTML += '<div class="term-line">> Connection Established! Processing...</div>';
                     ws.send(fileInput.files[0]);
                 };
                 ws.onmessage = (event) => {
@@ -124,7 +130,12 @@ def home():
     """
 
 @app.post("/scan-pro")
-async def scan_pro_document(file: UploadFile = File(...)):
+async def scan_pro_document(file: UploadFile = File(...), x_api_key: str = Header(None)):
+    # Security Check
+    if x_api_key != API_KEY:
+        logger.warning(f"Unauthorized access attempt with key: {x_api_key}")
+        raise HTTPException(status_code=403, detail="Unauthorized API Key")
+        
     try:
         logger.info(f"Scanning via POST: {file.filename}")
         content = await file.read()
@@ -133,6 +144,44 @@ async def scan_pro_document(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"POST OCR Error: {str(e)}")
         return {"success": False, "error": str(e)}
+
+@app.websocket("/ws-scan")
+async def websocket_scan(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        image_bytes = await websocket.receive_bytes()
+        log_queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def sync_log_callback(msg):
+            asyncio.run_coroutine_threadsafe(log_queue.put({"type": "log", "message": msg}), loop)
+
+        future = loop.run_in_executor(None, get_pro_ocr, image_bytes, sync_log_callback)
+
+        while not future.done():
+            try:
+                log_message = await asyncio.wait_for(log_queue.get(), timeout=0.2)
+                await websocket.send_json(log_message)
+            except asyncio.TimeoutError:
+                continue 
+
+        result = await future
+        while not log_queue.empty():
+            log_message = log_queue.get_nowait()
+            await websocket.send_json(log_message)
+
+        await websocket.send_json({"type": "result", "data": {"success": True, **result}})
+    except Exception as e:
+        logger.error(f"WebSocket Error: {e}")
+        try: await websocket.send_json({"type": "error", "message": str(e)})
+        except: pass
+    finally:
+        try: await websocket.close()
+        except: pass
+
+@app.get("/health")
+def keep_alive():
+    return {"status": "alive"}
 
 @app.websocket("/ws-scan")
 async def websocket_scan(websocket: WebSocket):
