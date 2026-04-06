@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.responses import HTMLResponse
 from ocr_engine import get_pro_ocr
 import logging
@@ -135,6 +135,23 @@ def home():
     </body>
     </html>
     """
+
+@app.post("/scan-pro")
+async def scan_pro_document(file: UploadFile = File(...)):
+    """
+    Standard POST endpoint for OCR (legacy/curl support).
+    Note: May hit 100s timeout on Render if image is very large.
+    """
+    try:
+        logger.info(f"Scanning via POST: {file.filename}")
+        content = await file.read()
+        # Using anyio to thread so it doesn't block the async loop
+        import anyio
+        result = await anyio.to_thread.run_sync(get_pro_ocr, content)
+        return {"success": True, "filename": file.filename, **result}
+    except Exception as e:
+        logger.error(f"POST OCR Error: {str(e)}")
+        return {"success": False, "error": str(e)}
 
 @app.websocket("/ws-scan")
 async def websocket_scan(websocket: WebSocket):
