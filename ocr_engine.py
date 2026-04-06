@@ -47,6 +47,15 @@ def classify_document(text):
         return "Student ID"
     return "General Document"
 
+def warm_up_ocr():
+    """Tesseract ko RAM mein load karne ke liye dummy run."""
+    try:
+        dummy_img = np.zeros((10, 10), dtype=np.uint8)
+        pytesseract.image_to_string(dummy_img, lang='eng+nep', config='--oem 1 --psm 3')
+        logger.info("⚡ OCR Engine: Warmed up and ready in RAM!")
+    except Exception as e:
+        logger.error(f"❌ Warm-up failed: {e}")
+
 def get_pro_ocr(image_bytes, log_callback=None):
     def send_log(msg):
         if log_callback: log_callback(msg)
