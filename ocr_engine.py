@@ -8,9 +8,15 @@ import re
 logger = logging.getLogger("SCHOOL_ERP_PRO_ENGINE")
 
 def auto_rotate_osd(img):
-    """Detects and fixes 90/180/270 degree rotations."""
+    """Detects and fixes 90/180/270 degree rotations efficiently."""
     try:
-        osd = pytesseract.image_to_osd(img)
+        # Optimization: OSD on a smaller, grayscale version is much faster
+        small_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        if small_gray.shape[1] > 800:
+            scale = 800.0 / small_gray.shape[1]
+            small_gray = cv2.resize(small_gray, (800, int(small_gray.shape[0] * scale)))
+        
+        osd = pytesseract.image_to_osd(small_gray, config='--psm 0 --oem 1')
         angle = re.search('(?<=Rotate: )\d+', osd).group(0)
         angle = int(angle)
         
@@ -24,16 +30,19 @@ def auto_rotate_osd(img):
     return img
 
 def deskew(img):
-    """Fixes minor tilts (-45 to 45 degrees)."""
+    """Fixes minor tilts faster."""
     coords = np.column_stack(np.where(img > 0))
-    if len(coords) == 0: return img
+    if len(coords) < 10: return img
     angle = cv2.minAreaRect(coords)[-1]
     if angle < -45: angle = -(90 + angle)
     else: angle = -angle
+    
+    if abs(angle) < 0.5: return img # Skip if almost straight
+    
     (h, w) = img.shape[:2]
     center = (w // 2, h // 2)
     M = cv2.getRotationMatrix2D(center, angle, 1.0)
-    return cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+    return cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
 
 def classify_document(text):
     text_lower = text.lower()
@@ -51,7 +60,7 @@ def warm_up_ocr():
     """Tesseract ko RAM mein load karne ke liye dummy run."""
     try:
         dummy_img = np.zeros((10, 10), dtype=np.uint8)
-        pytesseract.image_to_string(dummy_img, lang='eng+nep', config='--oem 1 --psm 3')
+        pytesseract.image_to_string(dummy_img, lang='eng', config='--oem 1 --psm 3')
         logger.info("⚡ OCR Engine: Warmed up and ready in RAM!")
     except Exception as e:
         logger.error(f"❌ Warm-up failed: {e}")
@@ -61,49 +70,61 @@ def get_pro_ocr(image_bytes, log_callback=None):
         if log_callback: log_callback(msg)
         logger.info(msg)
 
-    send_log("⚙️ Step 1: Image Decode...")
+    send_log("⚙️ Step 1: Decoding & Resizing...")
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None: raise ValueError("Invalid image")
     
-    send_log("🔄 Step 2: Auto-Rotating (Checking if upside down)...")
+    # CRITICAL SPEED FIX: Resize early. Higher resolution = exponentially slower Tesseract
+    h, w = img.shape[:2]
+    max_dim = 1000 # Optimized for accuracy vs speed
+    if w > max_dim or h > max_dim:
+        scale = max_dim / float(max(w, h))
+        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+
+    send_log("🔄 Step 2: Orientation Correction...")
     img = auto_rotate_osd(img)
 
-    h, w = img.shape[:2]
-    if w > 1200:
-        send_log("📐 Optimization: Resizing for 512MB RAM safety...")
-        img = cv2.resize(img, (1200, int(h * (1200 / w))), interpolation=cv2.INTER_AREA)
-
-    send_log("🖼️ Step 3: Preprocessing (Adaptive Binarization)...")
+    send_log("🖼️ Step 3: Fast Preprocessing...")
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 10)
+    # Using simpler threshold for speed, adaptive is slow on large images
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-    send_log("📏 Step 4: Deskewing (Straightening tilts)...")
-    deskewed_img = deskew(binary)
+    send_log("📏 Step 4: Deskewing...")
+    binary = deskew(binary)
 
-    import gc
-    gc.collect()
-
-    send_log("🧠 Step 5: Tesseract OCR Start (RAW Full Content Mode)...")
+    send_log("🧠 Step 5: Single-Pass Tesseract OCR...")
+    # lang='eng' is MUCH faster than 'eng+nep'. Use eng+nep only if strictly necessary.
+    # We'll stick to 'eng+nep' as requested but optimized config
     custom_config = r'--oem 1 --psm 3'
-    final_for_ocr = cv2.bitwise_not(deskewed_img)
     
-    # NEW: Using image_to_string directly to get the FULL content with formatting (newlines/tabs)
-    # No confidence filtering is applied to this raw output.
-    raw_text = pytesseract.image_to_string(final_for_ocr, lang='eng+nep', config=custom_config)
+    # We only call image_to_data once. It gives us text, confidence, and layout.
+    data = pytesseract.image_to_data(cv2.bitwise_not(binary), lang='eng+nep', config=custom_config, output_type=Output.DICT)
+    
+    # Extract text and confidence in one loop
+    full_text = []
+    conf_scores = []
+    
+    last_block_num = -1
+    for i in range(len(data['text'])):
+        text = data['text'][i].strip()
+        if text:
+            # Add newlines based on block/line changes to preserve structure
+            if data['block_num'][i] != last_block_num and last_block_num != -1:
+                full_text.append("\n")
+            full_text.append(text + " ")
+            conf_scores.append(int(data['conf'][i]))
+            last_block_num = data['block_num'][i]
 
-    send_log("📊 Step 6: Calculating Confidence & Classification...")
-    # We still use image_to_data just to get the average confidence score
-    data = pytesseract.image_to_data(final_for_ocr, lang='eng+nep', config=custom_config, output_type=Output.DICT)
-    
-    doc_type = classify_document(raw_text)
-    
-    conf_scores = [int(c) for c in data['conf'] if int(c) > 0]
+    raw_text = "".join(full_text).strip()
     avg_conf = np.mean(conf_scores) if conf_scores else 0
+    
+    send_log("📊 Step 6: Classification...")
+    doc_type = classify_document(raw_text)
 
-    send_log("✅ Scan Complete! Showing all detected characters.")
+    send_log("✅ Scan Complete!")
     return {
-        "text": raw_text.strip(),
+        "text": raw_text,
         "document_type": doc_type,
-        "confidence_avg": avg_conf
+        "confidence_avg": float(avg_conf)
     }
