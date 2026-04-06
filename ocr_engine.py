@@ -75,31 +75,42 @@ def get_pro_ocr(image_bytes, log_callback=None):
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None: raise ValueError("Invalid image")
     
-    # CRITICAL SPEED FIX: Resize early. Higher resolution = exponentially slower Tesseract
+    # TURBO SPEED: Reduced to 800px. Lower resolution = much faster OCR.
     h, w = img.shape[:2]
-    max_dim = 1000 # Optimized for accuracy vs speed
+    max_dim = 800 
     if w > max_dim or h > max_dim:
         scale = max_dim / float(max(w, h))
         img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
-    send_log("🔄 Step 2: Orientation Correction...")
+    send_log("🔄 Step 2: Orientation...")
     img = auto_rotate_osd(img)
 
-    send_log("🖼️ Step 3: Fast Preprocessing...")
+    send_log("🖼️ Step 3: Preprocessing...")
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    # Using simpler threshold for speed, adaptive is slow on large images
+    # Deskewing needs binary, but OCR likes grayscale
     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
     send_log("📏 Step 4: Deskewing...")
-    binary = deskew(binary)
+    # Get rotation matrix from binary but apply to grayscale for OCR quality/speed
+    coords = np.column_stack(np.where(binary > 0))
+    if len(coords) > 10:
+        angle = cv2.minAreaRect(coords)[-1]
+        if angle < -45: angle = -(90 + angle)
+        else: angle = -angle
+        if abs(angle) > 0.5:
+            (h, w) = gray.shape[:2]
+            M = cv2.getRotationMatrix2D((w // 2, h // 2), angle, 1.0)
+            gray = cv2.warpAffine(gray, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
 
-    send_log("🧠 Step 5: Single-Pass Tesseract OCR...")
-    # lang='eng' is MUCH faster than 'eng+nep'. Use eng+nep only if strictly necessary.
-    # We'll stick to 'eng+nep' as requested but optimized config
+    # Add 10px white border (Tesseract works better with padding)
+    gray = cv2.copyMakeBorder(gray, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=[255, 255, 255])
+
+    send_log("🧠 Step 5: Tesseract OCR Engine (LSTM)...")
+    # Using grayscale 'gray' instead of 'binary'. LSTM engine is optimized for this.
     custom_config = r'--oem 1 --psm 3'
     
-    # We only call image_to_data once. It gives us text, confidence, and layout.
-    data = pytesseract.image_to_data(cv2.bitwise_not(binary), lang='eng+nep', config=custom_config, output_type=Output.DICT)
+    # image_to_data call
+    data = pytesseract.image_to_data(gray, lang='eng+nep', config=custom_config, output_type=Output.DICT)
     
     # Extract text and confidence in one loop
     full_text = []
