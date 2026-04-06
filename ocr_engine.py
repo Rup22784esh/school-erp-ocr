@@ -35,10 +35,20 @@ def classify_document(text):
         return "Fee Receipt"
     return "General Document"
 
+def warm_up_ocr():
+    """Tesseract ko RAM mein load karne ke liye dummy run (Pre-loading models)"""
+    try:
+        # Create a tiny 10x10 empty image
+        dummy_img = np.zeros((10, 10), dtype=np.uint8)
+        # Pre-cache eng+nep models
+        pytesseract.image_to_string(dummy_img, lang='eng+nep', config='--oem 1 --psm 3')
+        logger.info("⚡ OCR Engine: Warmed up and ready in RAM!")
+    except Exception as e:
+        logger.error(f"❌ Warm-up failed: {e}")
+
 def get_pro_ocr(image_bytes, log_callback=None):
     """
     Pro-grade OCR optimized for Render Free Tier (512MB RAM).
-    Removed 'equ' (Math) to ensure stability and speed.
     """
     def send_log(msg):
         if log_callback:
@@ -52,7 +62,6 @@ def get_pro_ocr(image_bytes, log_callback=None):
         raise ValueError("Invalid image")
     
     h, w = img.shape[:2]
-    # Reduced to 1200px to save significant RAM
     if w > 1200:
         send_log(f"📐 Auto-resizing image from width {w}px to 1200px to save RAM...")
         img = cv2.resize(img, (1200, int(h * (1200 / w))), interpolation=cv2.INTER_AREA)
@@ -72,7 +81,6 @@ def get_pro_ocr(image_bytes, log_callback=None):
     custom_config = r'--oem 1 --psm 3'
     final_for_ocr = cv2.bitwise_not(deskewed_img)
     
-    # Removed '+equ' to prevent OOM (Out of Memory) crashes
     data = pytesseract.image_to_data(final_for_ocr, lang='eng+nep', config=custom_config, output_type=Output.DICT)
 
     send_log("🧹 Step 5: Filtering low-confidence text (>60% only)...")
@@ -90,7 +98,6 @@ def get_pro_ocr(image_bytes, log_callback=None):
 
     send_log("✅ Scan Complete!")
     
-    # Calculate average confidence for non-empty text blocks
     conf_scores = [int(c) for c in data['conf'] if int(c) > 0]
     avg_conf = np.mean(conf_scores) if conf_scores else 0
 

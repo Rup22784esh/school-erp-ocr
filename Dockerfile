@@ -9,16 +9,17 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Step 2: Manually download "Fast" language data (Memory Optimized)
-# We use tessdata_fast instead of tessdata_best to prevent OOM on 512MB RAM
+# Step 2: Manually download High-Quality (LSTM) language data
 WORKDIR /usr/share/tesseract-ocr/4.00/tessdata/
 
 RUN wget https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata -O eng.traineddata && \
     wget https://github.com/tesseract-ocr/tessdata_fast/raw/main/nep.traineddata -O nep.traineddata && \
     wget https://github.com/tesseract-ocr/tessdata_fast/raw/main/osd.traineddata -O osd.traineddata
 
-# Step 3: Set Environment Variable for Tesseract Path
+# Step 3: Set Environment Variables for Path and Memory
 ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/4.00/tessdata/
+ENV MALLOC_TRIM_THRESHOLD_=100000
+ENV PYTHONUNBUFFERED=1
 
 # Step 4: App Setup
 WORKDIR /app
