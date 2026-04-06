@@ -1,6 +1,7 @@
 FROM python:3.10-slim
 
 # Install system dependencies + OpenCV requirements
+# We only install English and Nepali language packs to keep it lightweight
 RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     tesseract-ocr-nep \
@@ -10,12 +11,6 @@ RUN apt-get update && apt-get install -y \
     wget \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-
-# SMART MOVE: Download the 'Best' Math model (not included in standard apt-get)
-# Note: Path might vary slightly depending on Tesseract version, usually /usr/share/tesseract-ocr/4.00/tessdata or /usr/share/tesseract-ocr/5/tessdata
-RUN mkdir -p /usr/share/tesseract-ocr/5/tessdata/ && \
-    wget -P /usr/share/tesseract-ocr/5/tessdata/ https://github.com/tesseract-ocr/tessdata_best/raw/main/equ.traineddata || \
-    wget -P /usr/share/tesseract-ocr/4.00/tessdata/ https://github.com/tesseract-ocr/tessdata_best/raw/main/equ.traineddata
 
 WORKDIR /app
 COPY requirements.txt .

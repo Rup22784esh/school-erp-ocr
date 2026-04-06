@@ -37,8 +37,8 @@ def classify_document(text):
 
 def get_pro_ocr(image_bytes, log_callback=None):
     """
-    Pro-grade OCR with real-time log callbacks, deskewing, 
-    confidence filtering, and classification.
+    Pro-grade OCR optimized for Render Free Tier (512MB RAM).
+    Removed 'equ' (Math) to ensure stability and speed.
     """
     def send_log(msg):
         if log_callback:
@@ -52,9 +52,10 @@ def get_pro_ocr(image_bytes, log_callback=None):
         raise ValueError("Invalid image")
     
     h, w = img.shape[:2]
-    if w > 2000:
-        send_log(f"📐 Auto-resizing image from width {w}px to 2000px to save RAM...")
-        img = cv2.resize(img, (2000, int(h * (2000 / w))), interpolation=cv2.INTER_AREA)
+    # Reduced to 1200px to save significant RAM
+    if w > 1200:
+        send_log(f"📐 Auto-resizing image from width {w}px to 1200px to save RAM...")
+        img = cv2.resize(img, (1200, int(h * (1200 / w))), interpolation=cv2.INTER_AREA)
 
     send_log("🖼️ Step 2: Adaptive Thresholding (Fixing lights & shadows)...")
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -63,12 +64,12 @@ def get_pro_ocr(image_bytes, log_callback=None):
     send_log("📏 Step 3: Deskewing (Fixing camera angles)...")
     deskewed_img = deskew(binary)
 
-    send_log("🧠 Step 4: Tesseract OCR Engine Start (eng+nep+equ)... [Isme thoda time lagega]")
+    send_log("🧠 Step 4: Tesseract OCR Engine Start (eng+nep)...")
     custom_config = r'--oem 1 --psm 3'
-    # Use bitwise_not because Tesseract prefers black text on white background
     final_for_ocr = cv2.bitwise_not(deskewed_img)
     
-    data = pytesseract.image_to_data(final_for_ocr, lang='eng+nep+equ', config=custom_config, output_type=Output.DICT)
+    # Removed '+equ' to prevent OOM (Out of Memory) crashes
+    data = pytesseract.image_to_data(final_for_ocr, lang='eng+nep', config=custom_config, output_type=Output.DICT)
 
     send_log("🧹 Step 5: Filtering low-confidence text (>60% only)...")
     clean_words = []
@@ -84,8 +85,13 @@ def get_pro_ocr(image_bytes, log_callback=None):
     doc_type = classify_document(extracted_text)
 
     send_log("✅ Scan Complete!")
+    
+    # Calculate average confidence for non-empty text blocks
+    conf_scores = [int(c) for c in data['conf'] if int(c) > 0]
+    avg_conf = np.mean(conf_scores) if conf_scores else 0
+
     return {
         "text": extracted_text,
         "document_type": doc_type,
-        "confidence_avg": np.mean([int(c) for c in data['conf'] if int(c) > 0]) if any(int(c) > 0 for c in data['conf']) else 0
+        "confidence_avg": avg_conf
     }
