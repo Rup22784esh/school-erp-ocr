@@ -1,25 +1,24 @@
 FROM python:3.9-slim
 
-# Install system dependencies for OpenCV, Paddle, and common utils
+# libgomp1 को जोड़ा गया है ताकि PaddleOCR का एरर खत्म हो सके
 RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
-    gcc \
-    python3-dev \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
+
+# यूजर सेटअप
+RUN useradd -m -u 1000 user
+USER user
+ENV PATH="/home/user/.local/bin:$PATH"
 
 WORKDIR /app
 
-# Copy and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# फाइलें कॉपी और इंस्टॉल करना
+COPY --chown=user ./requirements.txt requirements.txt
+RUN pip install --no-cache-dir --upgrade -r requirements.txt
 
-# Copy the application code
-COPY . .
+COPY --chown=user . /app
 
-# Pre-download PaddleOCR models (English & Devanagari/Hindi for Nepalese support)
-# lang='hi' supports Devanagari script used in Nepali
-RUN python3 -c "from paddleocr import PaddleOCR; PaddleOCR(use_angle_cls=True, lang='hi', use_gpu=False)"
-
-# Hugging Face Spaces use port 7860 by default
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
+# पोर्ट 7860
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860"]
