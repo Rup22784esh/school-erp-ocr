@@ -1,21 +1,32 @@
 FROM python:3.10-slim
 
-# Install system dependencies + OpenCV requirements
-# We only install English and Nepali language packs to keep it lightweight
+# Step 1: Install system dependencies
 RUN apt-get update && apt-get install -y \
     tesseract-ocr \
-    tesseract-ocr-nep \
-    tesseract-ocr-eng \
     libgl1 \
     libglib2.0-0 \
     wget \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# Step 2: Manually download High-Quality (LSTM) language data
+# This ensures we have the high-accuracy models that are 100% LSTM compatible.
+WORKDIR /usr/share/tesseract-ocr/4.00/tessdata/
+
+RUN wget https://github.com/tesseract-ocr/tessdata_best/raw/main/eng.traineddata -O eng.traineddata && \
+    wget https://github.com/tesseract-ocr/tessdata_best/raw/main/nep.traineddata -O nep.traineddata && \
+    wget https://github.com/tesseract-ocr/tessdata_best/raw/main/equ.traineddata -O equ.traineddata && \
+    wget https://github.com/tesseract-ocr/tessdata_best/raw/main/osd.traineddata -O osd.traineddata
+
+# Step 3: Set Environment Variable for Tesseract Path
+ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/4.00/tessdata/
+
+# Step 4: App Setup
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Step 5: Start Service
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
