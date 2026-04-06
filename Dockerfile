@@ -9,14 +9,13 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Step 2: Manually download High-Quality (LSTM) language data
-# This ensures we have the high-accuracy models that are 100% LSTM compatible.
+# Step 2: Manually download "Fast" language data (Memory Optimized)
+# We use tessdata_fast instead of tessdata_best to prevent OOM on 512MB RAM
 WORKDIR /usr/share/tesseract-ocr/4.00/tessdata/
 
-RUN wget https://github.com/tesseract-ocr/tessdata_best/raw/main/eng.traineddata -O eng.traineddata && \
-    wget https://github.com/tesseract-ocr/tessdata_best/raw/main/nep.traineddata -O nep.traineddata && \
-    wget https://github.com/tesseract-ocr/tessdata_best/raw/main/equ.traineddata -O equ.traineddata && \
-    wget https://github.com/tesseract-ocr/tessdata_best/raw/main/osd.traineddata -O osd.traineddata
+RUN wget https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata -O eng.traineddata && \
+    wget https://github.com/tesseract-ocr/tessdata_fast/raw/main/nep.traineddata -O nep.traineddata && \
+    wget https://github.com/tesseract-ocr/tessdata_fast/raw/main/osd.traineddata -O osd.traineddata
 
 # Step 3: Set Environment Variable for Tesseract Path
 ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/4.00/tessdata/

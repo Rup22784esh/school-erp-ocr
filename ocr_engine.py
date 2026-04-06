@@ -64,6 +64,10 @@ def get_pro_ocr(image_bytes, log_callback=None):
     send_log("📏 Step 3: Deskewing (Fixing camera angles)...")
     deskewed_img = deskew(binary)
 
+    # Manual Garbage Collection to free up RAM before heavy Tesseract work
+    import gc
+    gc.collect()
+
     send_log("🧠 Step 4: Tesseract OCR Engine Start (eng+nep)...")
     custom_config = r'--oem 1 --psm 3'
     final_for_ocr = cv2.bitwise_not(deskewed_img)
