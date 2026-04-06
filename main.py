@@ -1,8 +1,8 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from ocr_engine import get_pro_ocr
 import logging
-import anyio
+import asyncio
 
 # Setup detailed logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -30,10 +30,14 @@ def home():
             input[type="file"] { position: absolute; width: 100%; height: 100%; top: 0; left: 0; opacity: 0; cursor: pointer; }
             button { background: var(--primary); color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 0.5rem; font-weight: 600; cursor: pointer; width: 100%; font-size: 1rem; }
             button:disabled { background: #94a3b8; cursor: not-allowed; }
+            
+            /* Live Terminal Styles */
+            #terminal { background: #0f172a; color: #10b981; text-align: left; padding: 1rem; border-radius: 0.5rem; font-family: monospace; font-size: 0.85rem; height: 180px; overflow-y: auto; margin-top: 1rem; display: none; box-shadow: inset 0 4px 6px rgba(0,0,0,0.3); }
+            .term-line { margin-bottom: 4px; border-bottom: 1px solid #1e293b; padding-bottom: 2px; }
+            
             #result { margin-top: 2rem; text-align: left; display: none; }
             .result-card { background: #f1f5f9; padding: 1rem; border-radius: 0.5rem; border-left: 4px solid var(--primary); }
             pre { white-space: pre-wrap; word-wrap: break-word; font-size: 0.9rem; background: #fff; padding: 0.5rem; border-radius: 0.25rem; border: 1px solid #e2e8f0; }
-            .loading { display: none; margin: 1rem 0; font-weight: bold; color: var(--primary); }
             .badge { display: inline-block; padding: 0.25rem 0.5rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; margin-bottom: 0.5rem; }
             .badge-info { background: #dbeafe; color: #1e40af; }
         </style>
@@ -49,7 +53,8 @@ def home():
             </div>
             
             <button id="scan-btn">Start Intelligent Scan</button>
-            <div class="loading" id="loader">Processing... Please wait (Tesseract is thinking)</div>
+            
+            <div id="terminal"></div>
 
             <div id="result">
                 <h3>Scan Results</h3>
@@ -66,57 +71,125 @@ def home():
             const fileInput = document.getElementById('file-input');
             const fileName = document.getElementById('file-name');
             const scanBtn = document.getElementById('scan-btn');
-            const loader = document.getElementById('loader');
+            const terminal = document.getElementById('terminal');
             const resultDiv = document.getElementById('result');
 
             fileInput.onchange = () => {
                 if (fileInput.files[0]) fileName.innerText = fileInput.files[0].name;
             };
 
-            scanBtn.onclick = async () => {
+            scanBtn.onclick = () => {
                 if (!fileInput.files[0]) return alert("Please select a file first");
                 
                 scanBtn.disabled = true;
-                loader.style.display = 'block';
                 resultDiv.style.display = 'none';
+                terminal.style.display = 'block';
+                terminal.innerHTML = '<div class="term-line">> Initializing Secure WebSocket Connection...</div>';
 
-                const formData = new FormData();
-                formData.append("file", fileInput.files[0]);
+                // Connect to WebSocket
+                const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+                const ws = new WebSocket(protocol + window.location.host + '/ws-scan');
 
-                try {
-                    const response = await fetch("/scan-pro", { method: "POST", body: formData });
-                    const data = await response.json();
+                ws.onopen = () => {
+                    terminal.innerHTML += '<div class="term-line">> Connection Established! Uploading image...</div>';
+                    // Send raw image bytes to server
+                    ws.send(fileInput.files[0]);
+                };
 
-                    if (data.success) {
-                        document.getElementById('doc-type').innerText = data.document_type;
-                        document.getElementById('conf').innerText = Math.round(data.confidence_avg);
-                        document.getElementById('text-output').innerText = data.text;
+                ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    
+                    if (data.type === 'log') {
+                        terminal.innerHTML += `<div class="term-line">> ${data.message}</div>`;
+                        terminal.scrollTop = terminal.scrollHeight; // Auto-scroll
+                    } 
+                    else if (data.type === 'result') {
+                        const res = data.data;
+                        document.getElementById('doc-type').innerText = res.document_type;
+                        document.getElementById('conf').innerText = Math.round(res.confidence_avg);
+                        document.getElementById('text-output').innerText = res.text;
                         resultDiv.style.display = 'block';
-                    } else {
-                        alert("Error: " + data.error);
+                        
+                        terminal.innerHTML += '<div class="term-line" style="color: #34d399;">> Process Finished Successfully. Connection Closed.</div>';
+                        terminal.scrollTop = terminal.scrollHeight;
+                        scanBtn.disabled = false;
+                        ws.close();
                     }
-                } catch (e) {
-                    alert("Connection Failed: Ensure the service is awake.");
-                } finally {
+                    else if (data.type === 'error') {
+                        terminal.innerHTML += `<div class="term-line" style="color: #ef4444;">> ERROR: ${data.message}</div>`;
+                        scanBtn.disabled = false;
+                        ws.close();
+                    }
+                };
+
+                ws.onerror = () => {
+                    terminal.innerHTML += '<div class="term-line" style="color: #ef4444;">> Network Error: Connection Lost.</div>';
                     scanBtn.disabled = false;
-                    loader.style.display = 'none';
-                }
+                };
+
+                ws.onclose = () => {
+                    console.log("WebSocket Closed");
+                };
             };
         </script>
     </body>
     </html>
     """
 
-@app.post("/scan-pro")
-async def scan_pro_document(file: UploadFile = File(...)):
+@app.websocket("/ws-scan")
+async def websocket_scan(websocket: WebSocket):
+    await websocket.accept()
     try:
-        logger.info(f"PRO Scanning file: {file.filename}")
-        content = await file.read()
-        result = await anyio.to_thread.run_sync(get_pro_ocr, content)
-        return {"success": True, "filename": file.filename, **result}
+        # 1. Receive Image bytes over WebSocket
+        image_bytes = await websocket.receive_bytes()
+
+        # 2. Setup Async Queue for Thread-Safe Logging
+        log_queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def sync_log_callback(msg):
+            # This safely injects logs from the background sync thread into the async event loop
+            asyncio.run_coroutine_threadsafe(log_queue.put({"type": "log", "message": msg}), loop)
+
+        # 3. Run heavy OCR in a background thread so it doesn't block the WebSocket
+        # executor=None uses the default ThreadPoolExecutor
+        future = loop.run_in_executor(None, get_pro_ocr, image_bytes, sync_log_callback)
+
+        # 4. Stream logs to frontend while OCR is processing
+        while not future.done():
+            try:
+                # Wait 0.2s for a log message
+                log_message = await asyncio.wait_for(log_queue.get(), timeout=0.2)
+                await websocket.send_json(log_message)
+            except asyncio.TimeoutError:
+                # Keep the connection alive with a tiny empty message if needed, 
+                # but sending logs usually does the job.
+                continue 
+
+        # 5. Get Final Result from the completed future
+        result = await future
+
+        # 6. Flush any remaining logs from the queue
+        while not log_queue.empty():
+            log_message = log_queue.get_nowait()
+            await websocket.send_json(log_message)
+
+        # 7. Send final JSON result
+        await websocket.send_json({"type": "result", "data": {"success": True, **result}})
+
+    except WebSocketDisconnect:
+        logger.info("Client disconnected from WebSocket")
     except Exception as e:
-        logger.error(f"PRO OCR Error for {file.filename}: {str(e)}")
-        return {"success": False, "error": str(e)}
+        logger.error(f"WebSocket Error: {e}")
+        try:
+            await websocket.send_json({"type": "error", "message": str(e)})
+        except:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except:
+            pass
 
 @app.get("/health")
 def keep_alive():
